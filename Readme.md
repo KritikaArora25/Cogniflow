@@ -61,7 +61,7 @@ Cogniflow/
 ├─ frontend/           # React frontend
 ├─ backend/            # Node.js + Express backend
 ├─ README.md
-└─ package.json
+
 
 ```
 
