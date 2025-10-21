@@ -1,6 +1,11 @@
 # Cogniflow 🌸
 
 Cogniflow is a cognitive-behavior-based study planner that tracks focus and distractions in real-time using a Chrome extension, provides personalized productivity tips, and helps optimize study habits.
+
+![alt text](image.png)
+![alt text](image-1.png)
+![alt text](image-2.png)
+
 ---
 
 ## 🚀 Features
