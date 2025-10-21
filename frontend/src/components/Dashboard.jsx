@@ -279,8 +279,9 @@ const Dashboard = ({ stats, logout }) => {
 
   const handleBackToFocus = () => {
     console.log('🔄 USER: Clicked "Back to Focus"');
+    
     setStatus("Active");
-    setCurrentDistractedTime(0);
+    // setCurrentDistractedTime(0);
   };
 
   // -------------------- RENDER --------------------
@@ -321,7 +322,7 @@ const Dashboard = ({ stats, logout }) => {
         ) : (
           <button
             onClick={() => setShowModal(true)}
-            className="px-8 py-3 bg-gradient-to-r from-green-400 to-emerald-500 text-white font-semibold rounded-xl shadow hover:from-green-500 hover:to-emerald-600 transition transform hover:scale-105"
+            className="px-8 py-3 bg-gradient-to-r from-gray-700 to-gray-900 text-white font-semibold rounded-xl shadow hover:from-gray-800 hover:to-gray-900 transition transform hover:scale-105"
           >
             Start Study
           </button>
@@ -362,7 +363,7 @@ const Dashboard = ({ stats, logout }) => {
               {allowedUrls.map((url, index) => (
                 <span 
                   key={index}
-                  className="px-3 py-1 bg-green-100 text-green-800 text-sm rounded-full"
+                  className="px-3 py-1 bg-green-100 text-gray-800 text-sm rounded-full"
                 >
                   {url}
                 </span>
