@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Cogniflow Tab Reporter",
+  "version": "1.0",
+  "description": "Tells frontend what website you're on",
+  "permissions": ["activeTab","tabs"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

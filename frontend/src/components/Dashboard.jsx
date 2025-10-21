@@ -24,6 +24,75 @@ const Dashboard = ({ stats, logout }) => {
   const [onBreak, setOnBreak] = useState(false);
   const [breakTime, setBreakTime] = useState(0);
 
+  // DYNAMIC allowed URLs - will be set when session starts
+  const [allowedUrls, setAllowedUrls] = useState([]);
+
+  // -------------------- EXTENSION COMMUNICATION --------------------
+  useEffect(() => {
+    const handleExtensionMessage = async (event) => {
+      // Only process messages from our extension and when session is active
+      if (event.data.type === 'CURRENT_TAB_INFO' && status === "Active") {
+        const currentUrl = event.data.url;
+        
+        console.log('=== URL CHECK DEBUG ===');
+        console.log('Current URL:', currentUrl);
+        console.log('Allowed URLs:', allowedUrls);
+        
+        // BETTER MATCHING LOGIC
+        const isAllowed = allowedUrls.some(allowedUrl => {
+          // Remove http/https/www for better matching
+          const cleanCurrentUrl = currentUrl.toLowerCase().replace(/https?:\/\/(www\.)?/, '');
+          const cleanAllowedUrl = allowedUrl.toLowerCase().replace(/https?:\/\/(www\.)?/, '');
+          
+          console.log(`Comparing: "${cleanCurrentUrl}" WITH "${cleanAllowedUrl}"`);
+          
+          // Check if the domain matches
+          const currentDomain = cleanCurrentUrl.split('/')[0];
+          const allowedDomain = cleanAllowedUrl.split('/')[0];
+          
+          const matches = currentDomain.includes(allowedDomain) || allowedDomain.includes(currentDomain);
+          console.log(`Match result: ${matches}`);
+          
+          return matches;
+        });
+        
+        console.log('FINAL RESULT - Allowed?:', isAllowed);
+        console.log('=== END DEBUG ===');
+        
+        if (!isAllowed) {
+          console.log('🚨 EXTENSION: URL not allowed, setting status to Distracted');
+          setStatus("Distracted");
+        } else {
+          console.log('✅ EXTENSION: URL allowed, keeping status Active');
+          // If it's allowed, make sure we're not stuck in "Distracted" state
+          if (status === "Distracted") {
+            setStatus("Active");
+          }
+        }
+      }
+    };
+
+    window.addEventListener('message', handleExtensionMessage);
+    return () => window.removeEventListener('message', handleExtensionMessage);
+  }, [status, allowedUrls]);
+
+  // Tell extension when to start/stop monitoring
+  useEffect(() => {
+    if (status === "Active" && currentSession) {
+      // Tell extension to start monitoring
+      window.postMessage({
+        type: 'START_SESSION'
+      }, '*');
+      console.log('Extension: Session started with allowed URLs:', allowedUrls);
+    } else if (status === "Inactive") {
+      // Tell extension to stop monitoring
+      window.postMessage({
+        type: 'STOP_SESSION'
+      }, '*');
+      console.log('Extension: Session stopped');
+    }
+  }, [status, currentSession, allowedUrls]);
+
   // -------------------- FETCH DATA --------------------
   const fetchData = async () => {
     try {
@@ -50,7 +119,20 @@ const Dashboard = ({ stats, logout }) => {
     fetchData();
   }, []);
 
-  // -------------------- IDLE DETECTION --------------------
+  // -------------------- TAB VISIBILITY - COMMENTED OUT --------------------
+  /*
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden && status === "Active") setStatus("Distracted");
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [status]);
+  */
+
+  // -------------------- IDLE DETECTION - COMMENTED OUT --------------------
+  
   useEffect(() => {
     let idleTimer;
     const IDLE_LIMIT = 5 * 60 * 1000;
@@ -74,16 +156,7 @@ const Dashboard = ({ stats, logout }) => {
       window.removeEventListener("click", resetIdleTimer);
     };
   }, [status]);
-
-  // -------------------- TAB VISIBILITY --------------------
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.hidden && status === "Active") setStatus("Distracted");
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () =>
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [status]);
+  
 
   // -------------------- DASHBOARD TIMERS --------------------
   useEffect(() => {
@@ -110,7 +183,11 @@ const Dashboard = ({ stats, logout }) => {
         const updatedDuration = currentFocusTime + currentDistractedTime + 1;
         setCurrentSession(prev => ({ ...prev, duration: updatedDuration }));
         try {
-          await api.patch(`/study/${currentSession._id}`, { duration: updatedDuration });
+          await api.patch(`/study/${currentSession._id}`, { 
+            duration: updatedDuration,
+            focusTime: currentFocusTime,
+            distractedTime: currentDistractedTime
+          });
         } catch (err) {
           console.error("Error syncing session:", err);
         }
@@ -120,7 +197,10 @@ const Dashboard = ({ stats, logout }) => {
   }, [currentSession, currentFocusTime, currentDistractedTime]);
 
   // -------------------- DISTRACTED MODAL --------------------
-  useEffect(() => setShowDistractedModal(status === "Distracted"), [status]);
+  useEffect(() => {
+    console.log('🎭 DISTRACTED MODAL: Status changed to:', status);
+    setShowDistractedModal(status === "Distracted");
+  }, [status]);
 
   // -------------------- BREAK TIMER --------------------
   useEffect(() => {
@@ -134,8 +214,20 @@ const Dashboard = ({ stats, logout }) => {
   }, [onBreak]);
 
   // -------------------- HANDLERS --------------------
-  const handleStartStudy = session => {
-    setCurrentSession(session);
+  const handleStartStudy = (sessionData) => {
+    // Set dynamic allowed URLs from the session data
+    const dynamicAllowedUrls = [
+      window.location.hostname, // Always allow current study site
+      ...(sessionData.allowedSites || []) // Add user's allowed sites
+    ].filter(url => url && url.trim() !== ''); // Remove empty strings
+    
+    console.log('🚀 STARTING STUDY SESSION - DEBUG INFO:');
+    console.log('Session Data:', sessionData);
+    console.log('Current Website Hostname:', window.location.hostname);
+    console.log('Final Allowed URLs:', dynamicAllowedUrls);
+    
+    setAllowedUrls(dynamicAllowedUrls);
+    setCurrentSession(sessionData);
     setStatus("Active");
     setCurrentFocusTime(0);
     setCurrentDistractedTime(0);
@@ -143,12 +235,29 @@ const Dashboard = ({ stats, logout }) => {
   };
 
   const handleStopStudy = async () => {
-    setStudySessions([...studySessions, currentSession]);
+    // Update final session data
+    if (currentSession) {
+      try {
+        await api.patch(`/study/${currentSession._id}`, {
+          duration: currentFocusTime + currentDistractedTime,
+          focusTime: currentFocusTime,
+          distractedTime: currentDistractedTime,
+          status: 'completed'
+        });
+      } catch (err) {
+        console.error("Error updating session:", err);
+      }
+    }
+
+    setStudySessions(prev => [...prev, currentSession]);
     setStatus("Inactive");
     setCurrentSession(null);
+    setAllowedUrls([]); // Clear allowed URLs when session ends
+    
     try {
       const { data: weeklyData } = await api.get("/study/weekly");
       setWeeklyFocusData(weeklyData);
+      await fetchData(); // Refresh all data
     } catch (err) {
       console.error(err);
     }
@@ -165,30 +274,36 @@ const Dashboard = ({ stats, logout }) => {
     setCurrentFocusTime(0);
     setCurrentDistractedTime(0);
     setStatus("Inactive");
-    alert("Break finished! You’re refreshed and ready to start again.");
+    alert("Break finished! You're refreshed and ready to start again.");
+  };
+
+  const handleBackToFocus = () => {
+    console.log('🔄 USER: Clicked "Back to Focus"');
+    setStatus("Active");
+    setCurrentDistractedTime(0);
   };
 
   // -------------------- RENDER --------------------
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 via-blue-50 to-white p-6 font-sans">
       
-      {/* Try this exact code */}
-<nav className="flex flex-col sm:flex-row justify-between items-center mb-8 w-full gap-4 px-4">
-  <div className="flex-1 overflow-visible min-w-[200px]">
-    <h1 className="text-4xl sm:text-5xl md:text-6xl font-extrabold text-purple-500 
-                   tracking-tight p-1">
-      Cogniflow
-    </h1>
-  </div>
+      {/* Header */}
+      <nav className="flex flex-col sm:flex-row justify-between items-center mb-8 w-full gap-4 px-4">
+        <div className="flex-1 overflow-visible min-w-[200px]">
+          <h1 className="text-4xl sm:text-5xl md:text-6xl font-extrabold text-black 
+                         tracking-tight p-1">
+            Cogniflow
+          </h1>
+        </div>
 
-  <button
-    onClick={logout}
-    className="flex-shrink-0 px-6 py-3 bg-purple-500 text-white rounded-xl hover:bg-purple-700 
-               transition shadow-lg"
-  >
-    Logout
-  </button>
-</nav>
+        <button
+          onClick={logout}
+          className="flex-shrink-0 px-6 py-3 bg-black text-white rounded-xl hover:bg-black-700 
+                     transition shadow-lg"
+        >
+          Logout
+        </button>
+      </nav>
 
       {/* Status Cards */}
       <StatusCards
@@ -215,15 +330,19 @@ const Dashboard = ({ stats, logout }) => {
 
       {showModal && <StudyModal onStart={handleStartStudy} onClose={() => setShowModal(false)} />}
 
+      {/* Distracted Modal */}
       {showDistractedModal && (
         <div className="fixed inset-0 bg-black bg-opacity-30 flex justify-center items-center z-50">
           <div className="bg-white rounded-2xl shadow-lg p-6 w-full max-w-sm text-center">
-            <h2 className="text-xl font-semibold mb-4">Distracted!</h2>
+            <h2 className="text-xl font-semibold mb-4">🚨 Distracted!</h2>
             <p className="mb-4">
               You were distracted for {Math.floor(currentDistractedTime / 60)} min {currentDistractedTime % 60}s
             </p>
+            <p className="text-sm text-gray-600 mb-4">
+              Get back to your study site!
+            </p>
             <button
-              onClick={() => setStatus("Active")}
+              onClick={handleBackToFocus}
               className="px-4 py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition"
             >
               Back to Focus
@@ -232,38 +351,34 @@ const Dashboard = ({ stats, logout }) => {
         </div>
       )}
 
-      {/* Fatigue / Break Card */}
-      <div className="mb-8 flex justify-center">
-        <div className="bg-white rounded-2xl shadow-lg p-6 w-full max-w-md text-center">
-          <h2 className="text-2xl font-semibold mb-3 text-purple-700">
-            {fatigueLevel >= 70 ? "Take a Break ☕" : "Productivity Tip 💡"}
-          </h2>
-          {fatigueLevel >= 70 ? (
-            <>
-              <p className="mb-2 text-gray-700">Your fatigue level is {fatigueLevel}%. Time to refresh!</p>
-              <p className="mb-3 text-gray-600 italic">
-                Break Time: {Math.floor(breakTime / 60)}:{String(breakTime % 60).padStart(2,"0")}
-              </p>
-              <button
-                onClick={handleEndBreak}
-                className="px-6 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition"
-              >
-                End Break & Start Fresh
-              </button>
-            </>
-          ) : (
-            <>
-              <p className="mb-4 text-gray-700">
-                Tip: Maintain focus by taking short pauses, stretching, or hydrating regularly.
-              </p>
-              <button
-                disabled
-                className="px-6 py-2 bg-gray-300 text-gray-500 rounded-lg cursor-not-allowed"
-              >
-                Take Break
-              </button>
-            </>
-          )}
+      {/* Allowed Websites Display */}
+      {status === "Active" && allowedUrls.length > 0 && (
+        <div className="mb-4 text-center">
+          <div className="inline-flex flex-col items-center bg-white rounded-2xl px-6 py-4 shadow">
+            <span className="text-sm font-medium text-gray-600 mb-2">
+              ✅ Allowed Study Websites:
+            </span>
+            <div className="flex flex-wrap gap-2 justify-center">
+              {allowedUrls.map((url, index) => (
+                <span 
+                  key={index}
+                  className="px-3 py-1 bg-green-100 text-green-800 text-sm rounded-full"
+                >
+                  {url}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Extension Status */}
+      <div className="mb-4 text-center">
+        <div className="inline-flex items-center bg-white rounded-full px-4 py-2 shadow">
+          <div className={`w-3 h-3 rounded-full mr-2 ${status === "Active" ? 'bg-green-500' : 'bg-gray-400'}`}></div>
+          <span className="text-sm text-gray-600">
+            Extension: {status === "Active" ? 'Monitoring Tabs' : 'Standby'}
+          </span>
         </div>
       </div>
 
@@ -273,9 +388,9 @@ const Dashboard = ({ stats, logout }) => {
           initial={{ y: 20, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           transition={{ duration: 0.6 }}
-          className="text-2xl font-semibold text-gray-700 mb-4"
+          className="text-4xl font-bold text-[#040405] mb-4"
         >
-          Focus Analytics 📊
+          Focus Analytics
         </motion.h3>
         <Charts
           studySessions={studySessions}
